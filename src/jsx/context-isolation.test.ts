@@ -653,3 +653,65 @@ describe('JSX context isolation without AsyncLocalStorage', () => {
     expect(warnSpy).not.toHaveBeenCalled()
   })
 })
+
+describe('JSX context isolation with AsyncLocalStorage', () => {
+  it('isolates context values in sibling async Providers', async () => {
+    const { createContext, useContext, jsx, Fragment } = await importIndex()
+
+    const ThemeContext = createContext('default')
+    let releaseA!: () => void
+    let releaseB!: () => void
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve
+    })
+    const gateB = new Promise<void>((resolve) => {
+      releaseB = resolve
+    })
+
+    const Child = async ({ gate }: { gate: Promise<void> }) => {
+      await gate
+      return jsx('span', {}, useContext(ThemeContext))
+    }
+
+    const result = jsx(Fragment, {}, [
+      jsx(ThemeContext.Provider, { value: 'A' }, jsx(Child, { gate: gateA })),
+      jsx(ThemeContext.Provider, { value: 'B' }, jsx(Child, { gate: gateB })),
+    ]).toString()
+
+    releaseA()
+    await Promise.resolve()
+    releaseB()
+
+    expect(`${await result}`).toBe('<span>A</span><span>B</span>')
+  })
+
+  it('isolates context values in nested async Providers', async () => {
+    const { createContext, useContext, jsx } = await importIndex()
+
+    const ThemeContext = createContext('default')
+    let releaseOuter!: () => void
+    let releaseInner!: () => void
+    const gateOuter = new Promise<void>((resolve) => {
+      releaseOuter = resolve
+    })
+    const gateInner = new Promise<void>((resolve) => {
+      releaseInner = resolve
+    })
+
+    const Child = async ({ gate }: { gate: Promise<void> }) => {
+      await gate
+      return jsx('span', {}, useContext(ThemeContext))
+    }
+
+    const result = jsx(ThemeContext.Provider, { value: 'X' }, [
+      jsx(ThemeContext.Provider, { value: 'Y' }, jsx(Child, { gate: gateInner })),
+      jsx(Child, { gate: gateOuter }),
+    ]).toString()
+
+    releaseOuter()
+    await Promise.resolve()
+    releaseInner()
+
+    expect(`${await result}`).toBe('<span>Y</span><span>X</span>')
+  })
+})

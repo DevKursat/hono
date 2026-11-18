@@ -213,23 +213,41 @@ export const captureRenderContext = (): (<T>(callback: () => T) => T) => {
 export const createContext = <T>(defaultValue: T): Context<T> => {
   const values = [defaultValue]
   const context: Context<T> = ((props): HtmlEscapedString | Promise<HtmlEscapedString> => {
+    const store = getCurrentStore()
+    const storage = store ? loadAsyncLocalStorage() : undefined
+    let targetStore = store
+    if (storage && store) {
+      // Give each Provider subtree its own store snapshot so concurrent async
+      // siblings or children cannot observe each other's pushed context values.
+      const childStore: RenderStore = new WeakMap()
+      for (const c of globalContexts) {
+        const v = store.get(c)
+        if (v) {
+          childStore.set(c, [...v])
+        }
+      }
+      targetStore = childStore
+    }
+
     // Resolve the target array once, synchronously: the pop in `.finally()`
     // below may run later and must operate on the same array as the push.
-    const contextValues = getContextValuesIn(getCurrentStore(), context)
+    const contextValues = getContextValuesIn(targetStore, context)
     contextValues.push(props.value)
+    const renderChildrenOf = () =>
+      typeof props.children === 'string'
+        ? renderChildren([props.children])
+        : isUntrustedObject(props.children)
+          ? renderUntrustedObject(props.children)
+          : props.children
+            ? (Array.isArray(props.children)
+                ? new JSXFragmentNode('', {}, props.children)
+                : props.children
+              ).toString()
+            : raw('')
     let rendered
     try {
       rendered =
-        typeof props.children === 'string'
-          ? renderChildren([props.children])
-          : isUntrustedObject(props.children)
-            ? renderUntrustedObject(props.children)
-            : props.children
-              ? (Array.isArray(props.children)
-                  ? new JSXFragmentNode('', {}, props.children)
-                  : props.children
-                ).toString()
-              : raw('')
+        storage && targetStore ? storage.run(targetStore, renderChildrenOf) : renderChildrenOf()
     } catch (e) {
       contextValues.pop()
       throw e
